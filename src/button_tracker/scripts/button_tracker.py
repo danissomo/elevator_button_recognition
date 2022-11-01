@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import os
 import cv2
 import rospy
@@ -25,16 +25,16 @@ class ButtonTracker:
 
   def init_tracker(self, image, box_list):
     self.tracker = None
-    self.tracker = cv2.MultiTracker_create()
+    self.tracker =  cv2.legacy.MultiTracker_create()
     for box_item in box_list:
-      self.tracker.add(cv2.TrackerKCF_create(), image, box_item)
+      self.tracker.add(cv2.legacy.TrackerKCF_create(), image, box_item)
 
   @staticmethod
   def call_for_service(image):
     rospy.wait_for_service('recognition_service')
     compressed_image = CompressedImage()
     compressed_image.header.stamp = rospy.Time.now()
-    compressed_image.data = np.array(cv2.imencode('.jpg', image)[1]).tostring()
+    compressed_image.data = np.array(cv2.imencode('.jpg', image)[1]).tobytes()
     try:
       recognize = rospy.ServiceProxy('recognition_service', recog_server)
       response = recognize(compressed_image)
@@ -60,8 +60,70 @@ class ButtonTracker:
           str_disp += char_2
         char_list.append(str_disp)
       return box_list, score_list, class_list, char_list
-    except rospy.ServiceException, e:
-      print "Service call failed: {}".format(e)
+    except rospy.ServiceException as e:
+      rospy.logwarn("Service call failed: {}".format(e))
+  @staticmethod
+  def call_for_service2(image):
+    rospy.wait_for_service('recognition_service')
+    compressed_image = image
+    try:
+      recognize = rospy.ServiceProxy('recognition_service', recog_server)
+      response = recognize(compressed_image)
+      box_list = []
+      score_list = []
+      class_list = []
+      char_list = []
+      for box in response.box.data:
+        rect = tuple(
+          [box.x_min, box.y_min, box.x_max - box.x_min, box.y_max - box.y_min])
+        box_list.append(rect)
+        score_list.append(box.score)
+        class_list.append(box.categ)
+        str_disp = ''
+        char_0 = text_coding[box.char0 + 1]
+        char_1 = text_coding[box.char1 + 1]
+        char_2 = text_coding[box.char2 + 1]
+        if box.char0 != 46:
+          str_disp += char_0
+        if box.char1 != 46:
+          str_disp += char_1
+        if box.char2 != 46:
+          str_disp += char_2
+        char_list.append(str_disp)
+      return box_list, score_list, class_list, char_list
+    except rospy.ServiceException as e:
+      rospy.logwarn("Service call failed: {}".format(e))
+
+def read_topic(topic_name):
+  
+  img_comp : CompressedImage = rospy.wait_for_message(topic_name, CompressedImage)
+  np_img_arr = np.frombuffer(img_comp.data, np.uint8)
+  img_cv = cv2.imdecode(np_img_arr, cv2.IMREAD_COLOR)
+  button_tracker = ButtonTracker()
+  boxes, scores, classes, chars = button_tracker.call_for_service2(img_comp)
+  button_tracker.init_tracker(img_cv, boxes)
+  while not rospy.is_shutdown():
+    img_comp : CompressedImage = rospy.wait_for_message(topic_name, CompressedImage)
+    np_img_arr = np.frombuffer(img_comp.data, np.uint8)
+    img_cv = cv2.imdecode(np_img_arr, cv2.IMREAD_COLOR)
+    button_tracker.tracker.getObjects()
+    ok, boxes = button_tracker.tracker.update(img_cv)
+    if not ok:
+      boxes, scores, classes, chars = button_tracker.call_for_service2(img_comp)
+      button_tracker.init_tracker(img_cv, boxes)
+      ok, boxes = button_tracker.tracker.update(img_cv)
+
+    for box, char in zip(boxes, chars):
+      p1 = (int(box[0]), int(box[1]))
+      p2 = (int(box[0] + box[2]), int(box[1] + box[3]))
+      cv2.rectangle(img_cv, p1, p2, (0, 255, 0), thickness=3)
+      cv2.putText(img_cv, char, p1, cv2.FONT_HERSHEY_SIMPLEX, 1, color=(0, 255, 0))
+    rospy.logdebug(img_cv.dtype)
+
+    cv2.imshow('button_tracker', img_cv/255)
+    k = cv2.waitKey(1)
+    if k == 27:
+      break  # esc pressed
 
 
 def read_video(video_name):
@@ -76,15 +138,16 @@ def read_video(video_name):
   (state, frame) = video.read()
   img_height = frame.shape[0] / 2
   img_width = frame.shape[1] / 2
-  frame = cv2.resize(frame, dsize=(img_width, img_height))
-  (boxes, scores, classes, chars) = button_tracker.call_for_service(frame)
+  
+  frame = cv2.resize(frame, dsize=(int(img_width), int(img_height)))
+  boxes, scores, classes, chars = button_tracker.call_for_service(frame)
   button_tracker.init_tracker(frame, boxes)
   # TODO: replace the counter with an measurement about the tracker
   counter = 0
   while state:
     counter += 1
     (state, frame) = video.read()
-    frame = cv2.resize(frame, dsize=(img_width, img_height))
+    frame = cv2.resize(frame, dsize=(int(img_width), int(img_height)))
     if not state:
       sys.exit()
     ok, boxes = button_tracker.tracker.update(frame)
@@ -95,6 +158,7 @@ def read_video(video_name):
       p1 = (int(box[0]), int(box[1]))
       p2 = (int(box[0] + box[2]), int(box[1] + box[3]))
       cv2.rectangle(frame, p1, p2, (0, 255, 0), thickness=3)
+      text_position = (box[0]+20, box[1]+50)
       cv2.putText(frame, char, p1, cv2.FONT_HERSHEY_SIMPLEX, 1, color=(0, 255, 0))
     cv2.imshow('button_tracker', frame)
     k = cv2.waitKey(1)
@@ -124,8 +188,10 @@ def read_image(image_list):
 
 
 if __name__ == '__main__':
-  rospy.init_node('button_tracker', anonymous=True)
+  rospy.init_node('button_tracker', anonymous=True, log_level=rospy.DEBUG)
   img_only = rospy.get_param('button_tracker/img_only', True)
+  if rospy.get_param('button_tracker/parse_topic'):
+    read_topic("/camera/color/image_raw/compressed")
   if img_only:
     image_path = rospy.get_param('button_tracker/image_path', '../test_samples')
     image_number = rospy.get_param('button_tracker/image_number', 3)

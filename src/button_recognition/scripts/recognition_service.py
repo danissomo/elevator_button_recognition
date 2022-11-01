@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import os
 import sys
 import cv2
@@ -45,12 +45,12 @@ class ButtonRecognition:
     # Load frozen graph
     detection_graph = tf.Graph()
     with detection_graph.as_default():
-      od_graph_def = tf.GraphDef()
-      with tf.gfile.GFile(graph_path, 'rb') as fid:
+      od_graph_def = tf.compat.v1.GraphDef()
+      with tf.compat.v2.io.gfile.GFile(graph_path, 'rb') as fid:
         serialized_graph = fid.read()
         od_graph_def.ParseFromString(serialized_graph)
         tf.import_graph_def(od_graph_def, name='')
-    self.session = tf.Session(graph=detection_graph)
+    self.session = tf.compat.v1.Session(graph=detection_graph)
     self.img_key = detection_graph.get_tensor_by_name('image_tensor:0')
     self.results.append(detection_graph.get_tensor_by_name('detection_boxes:0'))
     self.results.append(detection_graph.get_tensor_by_name('detection_scores:0'))
@@ -75,13 +75,14 @@ class ButtonRecognition:
       self.session.close()
 
   def predict(self, request):
+    rospy.loginfo("GOT_REQEST")
     image = request.image
     if len(image.data) == 0:
       rospy.logerr('None image received!')
       return recog_serverResponse(None)
     start = rospy.get_time()
     if VERBOSE:
-      print 'received image of type: "%s"' % image.format
+      print ('received image of type: "%s"' % image.format)
     np_arr = np.fromstring(image.data, np.uint8)
     image_np = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     # image_np = cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB)
@@ -110,7 +111,7 @@ class ButtonRecognition:
       sample.y_max = int(box[2] * img_height)
       sample.x_max = int(box[3] * img_width)
       sample.score = score    # float
-      sample.categ = label    # int
+      sample.categ = int(label)    # int
       sample.char0 = char[0]
       sample.char1 = char[1]
       sample.char2 = char[2]
@@ -118,6 +119,7 @@ class ButtonRecognition:
     end = rospy.get_time()
     rospy.loginfo('Recognition finished: {} objects detected using {} seconds!'.format(
       num, end-start))
+    rospy.loginfo(recog_resp)
     return recog_serverResponse(recog_resp)
 
   @staticmethod
